@@ -36,6 +36,9 @@ config.yaml
 images/
 *.log
 
+# Documents folder - users should add their own
+documents/
+
 # Temporary files
 tmp/
 temp/

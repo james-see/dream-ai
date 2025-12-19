@@ -117,13 +117,31 @@ The application provides four main views:
 
 ### Adding Documents
 
-Place your PDF and EPUB files in the documents directory (default: `~/documents`), then:
+**Important**: The `documents/` folder is not included in the repository. You need to create it and add your own PDF and EPUB files.
 
-1. Go to Documents view (Press 2)
-2. Press 'a' to add documents
-3. Documents will be automatically processed
+1. **Create the documents directory** (if it doesn't exist):
+   ```bash
+   mkdir -p documents
+   ```
 
-The system uses incremental processing - only new or changed documents are processed.
+2. **Add your PDF and EPUB files** to the `documents/` directory:
+   ```bash
+   cp /path/to/your/dream-books/*.pdf documents/
+   cp /path/to/your/dream-books/*.epub documents/
+   ```
+
+3. **Process documents in the TUI**:
+   - Start the application: `./bin/dream-ai`
+   - Go to Documents view (Press 2)
+   - Press 'a' to add/process documents
+   - Documents will be automatically processed and indexed
+
+The system uses incremental processing - only new or changed documents are processed. You can add documents about:
+- Dream interpretation
+- Symbol meanings
+- Psychology and symbolism
+- Mythology and archetypes
+- Any related content you want to query
 
 ## Configuration
 
