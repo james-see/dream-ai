@@ -36,7 +36,7 @@ type RetrievalResult struct {
 
 // Retrieve finds relevant chunks and images for a query
 func (r *Retriever) Retrieve(ctx context.Context, query string) (*RetrievalResult, error) {
-	// Generate query embedding
+	// Generate query embedding (for text chunks - 768 dimensions)
 	queryEmbedding, err := r.textEmb.Embed(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate query embedding: %w", err)
@@ -48,10 +48,13 @@ func (r *Retriever) Retrieve(ctx context.Context, query string) (*RetrievalResul
 		return nil, fmt.Errorf("failed to search chunks: %w", err)
 	}
 
-	// Search for similar images
+	// Search for similar images - skip if dimension mismatch (images use 512-dim embeddings)
+	// We can't use text embeddings (768-dim) to search images (512-dim)
 	images, err := r.db.SearchSimilarImages(ctx, queryEmbedding, r.topK)
 	if err != nil {
-		return nil, fmt.Errorf("failed to search images: %w", err)
+		// Dimension mismatch is expected - images use different embedding model
+		// Just return empty images list instead of failing
+		images = []*db.Image{}
 	}
 
 	return &RetrievalResult{

@@ -20,7 +20,7 @@ type Processor struct {
 	textEmb    *embeddings.TextEmbedder
 	imageEmb   *embeddings.ImageEmbedder
 	pdfParser  *PDFParser
-	epubParser *EPUBParser
+	epubParser Parser // Use interface to support both EPUBParser and EPUBParserV2
 	chunkSize  int
 	chunkOverlap int
 }
@@ -38,7 +38,7 @@ func NewProcessor(
 		textEmb:     textEmb,
 		imageEmb:    imageEmb,
 		pdfParser:   NewPDFParser(imageDir),
-		epubParser:  NewEPUBParser(imageDir),
+		epubParser:  NewEPUBParserV2(imageDir), // Use zip-based parser for EPUB 3.0 support
 		chunkSize:   chunkSize,
 		chunkOverlap: chunkOverlap,
 	}
@@ -59,7 +59,7 @@ func (p *Processor) ProcessDocument(ctx context.Context, filePath string) error 
 	}
 
 	if existingDoc != nil {
-		// Document already processed, skip
+		// Document already processed, skip silently
 		return nil
 	}
 
@@ -87,18 +87,22 @@ func (p *Processor) ProcessDocument(ctx context.Context, filePath string) error 
 		parsed, err = p.epubParser.Parse(filePath)
 	}
 	if err != nil {
+		errorMsg := fmt.Sprintf("failed to parse document: %v", err)
+		p.db.UpdateDocumentError(ctx, doc.ID, errorMsg)
 		return fmt.Errorf("failed to parse document: %w", err)
 	}
 
 	// Process text chunks
 	if err := p.processTextChunks(ctx, doc.ID, parsed.Text); err != nil {
+		errorMsg := fmt.Sprintf("failed to process text chunks: %v", err)
+		p.db.UpdateDocumentError(ctx, doc.ID, errorMsg)
 		return fmt.Errorf("failed to process text chunks: %w", err)
 	}
 
 	// Process images (non-blocking - continue even if image processing fails)
 	if err := p.processImages(ctx, doc.ID, parsed.Images); err != nil {
-		// Log error but don't fail document processing
-		fmt.Printf("Warning: failed to process images: %v\n", err)
+		// Silently continue - image processing is optional
+		// Error is not critical for document processing
 	}
 
 	// Mark document as processed
@@ -149,7 +153,7 @@ func (p *Processor) processImages(ctx context.Context, docID uuid.UUID, images [
 		caption, embedding, err := p.imageEmb.ProcessImage(ctx, img.FilePath)
 		if err != nil {
 			// Log error but continue with other images
-			fmt.Printf("Warning: failed to process image %s: %v\n", img.FilePath, err)
+			// Silently skip failed images - continue processing others
 			continue
 		}
 

@@ -3,215 +3,285 @@ package tui
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
+	"time"
 
-	"github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/dream-ai/cli/internal/ollama"
+	"github.com/dream-ai/cli/internal/rag"
+	"github.com/gdamore/tcell/v2"
 	"github.com/google/uuid"
+	"github.com/rivo/tview"
 )
 
-// ChatView handles the chat interface
+// ChatView handles the chat interface using tview
 type ChatView struct {
-	app         *App
-	model       string
-	messages    []Message
-	input       string
-	cursor      int
-	width       int
-	height      int
-	loading     bool
-	scrollOffset int
+	app      *App
+	flex     *tview.Flex
+	messages *tview.TextView
+	input    *tview.TextArea
+	model    string
+
+	messagesData []Message
+	loading      bool
 }
 
 // Message represents a chat message
 type Message struct {
-	ID       string
-	Role     string // "user" or "assistant"
-	Content  string
-	Streaming bool
+	Role    string
+	Content string
+	Sources []string // Document file paths used as sources
 }
 
 // NewChatView creates a new chat view
 func NewChatView(app *App, defaultModel string) *ChatView {
-	return &ChatView{
-		app:      app,
-		model:    defaultModel,
-		messages: []Message{},
-		width:    80,
-		height:   24,
+	cv := &ChatView{
+		app:          app,
+		model:        defaultModel,
+		messagesData: []Message{},
 	}
-}
 
-// Init initializes the chat view
-func (cv *ChatView) Init() tea.Cmd {
-	return nil
-}
+	// Create messages text view
+	cv.messages = tview.NewTextView().
+		SetDynamicColors(true).
+		SetWrap(true).
+		SetScrollable(true)
+	cv.messages.SetBorder(true).SetTitle(" Chat ")
 
-// Update handles updates
-func (cv *ChatView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		cv.width = msg.Width
-		cv.height = msg.Height
-		return cv, nil
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "enter":
-			if cv.input != "" && !cv.loading {
-				return cv, cv.sendMessage()
-			}
-		case "backspace":
-			if len(cv.input) > 0 {
-				cv.input = cv.input[:len(cv.input)-1]
-			}
-		case "ctrl+l":
-			cv.messages = []Message{}
-			return cv, nil
-		default:
-			if !cv.loading && msg.Type == tea.KeyRunes {
-				cv.input += msg.String()
-			}
+	// Create input text area (supports multi-line and wrapping)
+	cv.input = tview.NewTextArea().
+		SetPlaceholder("Ask about dreams or symbols... (Ctrl+Enter to send)").
+		SetWrap(true)
+
+	// Handle Ctrl+Enter to send message
+	cv.input.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEnter && event.Modifiers()&tcell.ModCtrl != 0 {
+			cv.sendMessage()
+			return nil
 		}
-	case streamingMsg:
-		// Update streaming message
-		if len(cv.messages) > 0 && cv.messages[len(cv.messages)-1].Streaming {
-			cv.messages[len(cv.messages)-1].Content += msg.text
-			return cv, nil
-		}
-	case messageCompleteMsg:
-		cv.loading = false
-		if len(cv.messages) > 0 {
-			cv.messages[len(cv.messages)-1].Streaming = false
-		}
-		return cv, nil
-	}
-	return cv, nil
+		return event
+	})
+
+	// Create input container with label
+	inputFlex := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(tview.NewTextView().SetText("> ").SetDynamicColors(false), 1, 0, false).
+		AddItem(cv.input, 0, 1, true)
+	inputFlex.SetBorder(false)
+
+	// Create main flex layout
+	cv.flex = tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(cv.messages, 0, 1, false).
+		AddItem(inputFlex, 3, 0, true)
+
+	return cv
 }
 
-// View renders the chat view
-func (cv *ChatView) View() string {
-	var lines []string
-
-	// Render messages
-	availableHeight := cv.height - 4 // Leave space for input
-	startIdx := 0
-	if len(cv.messages) > availableHeight {
-		startIdx = len(cv.messages) - availableHeight
-	}
-
-	for i := startIdx; i < len(cv.messages); i++ {
-		msg := cv.messages[i]
-		lines = append(lines, cv.renderMessage(msg))
-	}
-
-	// Render input
-	inputLine := lipgloss.NewStyle().
-		Width(cv.width - 2).
-		Render(fmt.Sprintf("> %s", cv.input))
-
-	if cv.loading {
-		inputLine += " [thinking...]"
-	}
-
-	lines = append(lines, "")
-	lines = append(lines, inputLine)
-
-	return lipgloss.JoinVertical(lipgloss.Left, lines...)
-}
-
-// renderMessage renders a single message
-func (cv *ChatView) renderMessage(msg Message) string {
-	var style lipgloss.Style
-	if msg.Role == "user" {
-		style = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("39")).
-			Bold(true)
-	} else {
-		style = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("252"))
-	}
-
-	rolePrefix := "You: "
-	if msg.Role == "assistant" {
-		rolePrefix = "AI: "
-	}
-
-	content := style.Render(rolePrefix + msg.Content)
-	return lipgloss.NewStyle().Width(cv.width - 2).Render(content)
+// GetPrimitive returns the tview primitive
+func (cv *ChatView) GetPrimitive() tview.Primitive {
+	return cv.flex
 }
 
 // sendMessage sends a message and gets a response
-func (cv *ChatView) sendMessage() tea.Cmd {
-	userMsg := cv.input
-	cv.input = ""
+func (cv *ChatView) sendMessage() {
+	userMsg := cv.input.GetText()
+	if strings.TrimSpace(userMsg) == "" || cv.loading {
+		return
+	}
+
+	// Clear input
+	cv.input.SetText("", false)
 	cv.loading = true
 
 	// Add user message
-	cv.messages = append(cv.messages, Message{
-		ID:      uuid.New().String(),
+	cv.messagesData = append(cv.messagesData, Message{
 		Role:    "user",
 		Content: userMsg,
 	})
+	cv.renderMessages()
 
 	// Add placeholder for assistant message
-	assistantMsg := Message{
-		ID:        uuid.New().String(),
-		Role:      "assistant",
-		Content:   "",
-		Streaming: true,
-	}
-	cv.messages = append(cv.messages, assistantMsg)
+	cv.messagesData = append(cv.messagesData, Message{
+		Role:    "assistant",
+		Content: "[yellow]Thinking...",
+	})
+	cv.renderMessages()
 
-	return func() tea.Msg {
-		return cv.generateResponse(userMsg)
-	}
+	// Generate response asynchronously
+	go cv.generateResponse(userMsg)
 }
 
 // generateResponse generates a response using RAG
-func (cv *ChatView) generateResponse(query string) tea.Msg {
-	ctx := context.Background()
+func (cv *ChatView) generateResponse(query string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
 
 	// Retrieve relevant context
 	result, err := cv.app.retriever.Retrieve(ctx, query)
 	if err != nil {
-		return messageCompleteMsg{error: err}
+		cv.app.app.QueueUpdateDraw(func() {
+			cv.messagesData[len(cv.messagesData)-1].Content = fmt.Sprintf("[red]Error: %v", err)
+			cv.loading = false
+			cv.renderMessages()
+		})
+		return
 	}
 
 	// Build context
 	context := cv.app.contextBuilder.BuildContext(result)
 	prompt := cv.app.contextBuilder.BuildPrompt(context, query)
 
-	// Generate response with streaming
-	var response strings.Builder
-	err = cv.app.ollamaClient.GenerateStream(ctx, &ollama.GenerateRequest{
+	// Generate response
+	response, err := cv.app.ollamaClient.Generate(ctx, &ollama.GenerateRequest{
 		Model:  cv.model,
 		Prompt: prompt,
-		Stream: true,
-	}, func(chunk string) {
-		response.WriteString(chunk)
-		// In a real implementation, you'd send streaming updates here
+		Stream: false,
 	})
 
-	if err != nil {
-		return messageCompleteMsg{error: err}
-	}
+	// Extract unique source documents from retrieval result
+	sources := cv.extractSources(ctx, result)
 
-	// Update the last message
-	if len(cv.messages) > 0 {
-		cv.messages[len(cv.messages)-1].Content = response.String()
-		cv.messages[len(cv.messages)-1].Streaming = false
-	}
-
-	return messageCompleteMsg{}
+	cv.app.app.QueueUpdateDraw(func() {
+		if err != nil {
+			cv.messagesData[len(cv.messagesData)-1].Content = fmt.Sprintf("[red]Error: %v", err)
+			cv.messagesData[len(cv.messagesData)-1].Sources = nil
+		} else {
+			cv.messagesData[len(cv.messagesData)-1].Content = response
+			cv.messagesData[len(cv.messagesData)-1].Sources = sources
+		}
+		cv.loading = false
+		cv.renderMessages()
+	})
 }
 
-// streamingMsg represents a streaming text chunk
-type streamingMsg struct {
-	text string
+// renderMessages updates the messages display
+func (cv *ChatView) renderMessages() {
+	var lines []string
+	for _, msg := range cv.messagesData {
+		var prefix string
+		var color string
+		if msg.Role == "user" {
+			prefix = "You: "
+			color = "[cyan]"
+			lines = append(lines, fmt.Sprintf("%s%s%s[white]", color, prefix, msg.Content))
+		} else {
+			prefix = "AI: "
+			color = "[white]"
+			// Convert markdown to tview format and add content
+			formattedContent := cv.formatMarkdown(msg.Content)
+			lines = append(lines, fmt.Sprintf("%s%s%s[white]", color, prefix, formattedContent))
+
+			// Add sources section if available
+			if len(msg.Sources) > 0 {
+				lines = append(lines, "")
+				lines = append(lines, "[yellow]Sources Found:[white]")
+				for _, source := range msg.Sources {
+					lines = append(lines, fmt.Sprintf("  [gray]- %s[white]", source))
+				}
+			}
+		}
+	}
+	cv.messages.SetText(strings.Join(lines, "\n"))
+	cv.messages.ScrollToEnd()
 }
 
-// messageCompleteMsg signals that message generation is complete
-type messageCompleteMsg struct {
-	error error
+// formatMarkdown converts markdown syntax to tview color codes
+func (cv *ChatView) formatMarkdown(text string) string {
+	// First, handle headers and lists (process line by line)
+	lines := strings.Split(text, "\n")
+	var formattedLines []string
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		// Process headers first (before bold processing)
+		if strings.HasPrefix(trimmed, "### ") {
+			// Level 3 header
+			headerText := strings.TrimPrefix(trimmed, "### ")
+			formattedLines = append(formattedLines, fmt.Sprintf("[yellow]%s[white]", headerText))
+			continue
+		} else if strings.HasPrefix(trimmed, "## ") {
+			// Level 2 header
+			headerText := strings.TrimPrefix(trimmed, "## ")
+			formattedLines = append(formattedLines, fmt.Sprintf("[yellow]%s[white]", headerText))
+			continue
+		} else if strings.HasPrefix(trimmed, "# ") {
+			// Level 1 header
+			headerText := strings.TrimPrefix(trimmed, "# ")
+			formattedLines = append(formattedLines, fmt.Sprintf("[yellow]%s[white]", headerText))
+			continue
+		} else if strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* ") {
+			// Bullet points - process bold within bullets
+			bulletText := strings.TrimPrefix(strings.TrimPrefix(trimmed, "- "), "* ")
+			formattedBullet := cv.processBold(bulletText)
+			formattedLines = append(formattedLines, fmt.Sprintf("  [gray]•[white] %s", formattedBullet))
+			continue
+		}
+
+		// Process bold text in regular lines
+		formattedLine := cv.processBold(line)
+		formattedLines = append(formattedLines, formattedLine)
+	}
+
+	return strings.Join(formattedLines, "\n")
+}
+
+// processBold converts **bold** markdown to [yellow]bold[white] tview format
+func (cv *ChatView) processBold(text string) string {
+	// Find all ** pairs and replace them
+	var result strings.Builder
+	i := 0
+	boldOpen := false
+
+	for i < len(text) {
+		if i < len(text)-1 && text[i] == '*' && text[i+1] == '*' {
+			if boldOpen {
+				result.WriteString("[white]")
+			} else {
+				result.WriteString("[yellow]")
+			}
+			boldOpen = !boldOpen
+			i += 2
+		} else {
+			result.WriteByte(text[i])
+			i++
+		}
+	}
+
+	// If we ended with an open bold tag, close it
+	if boldOpen {
+		result.WriteString("[white]")
+	}
+
+	return result.String()
+}
+
+// extractSources extracts unique document file paths from retrieval result
+func (cv *ChatView) extractSources(ctx context.Context, result *rag.RetrievalResult) []string {
+	sourceMap := make(map[string]bool)
+	var sources []string
+
+	// Get document IDs from chunks
+	docIDs := make(map[uuid.UUID]bool)
+	for _, chunk := range result.Chunks {
+		docIDs[chunk.DocumentID] = true
+	}
+	for _, img := range result.Images {
+		docIDs[img.DocumentID] = true
+	}
+
+	// Fetch document file paths
+	for docID := range docIDs {
+		doc, err := cv.app.db.GetDocumentByID(ctx, docID)
+		if err == nil && doc != nil {
+			filePath := doc.FilePath
+			if !sourceMap[filePath] {
+				sourceMap[filePath] = true
+				sources = append(sources, filepath.Base(filePath))
+			}
+		}
+	}
+
+	return sources
 }

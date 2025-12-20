@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // Client wraps Ollama API interactions
@@ -22,8 +23,10 @@ func NewClient(baseURL string) *Client {
 		baseURL = "http://localhost:11434"
 	}
 	return &Client{
-		baseURL:    baseURL,
-		httpClient: &http.Client{},
+		baseURL: baseURL,
+		httpClient: &http.Client{
+			Timeout: 5 * time.Minute, // 5 minute timeout for generation requests
+		},
 	}
 }
 

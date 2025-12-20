@@ -49,14 +49,35 @@ func (p *PDFParser) Parse(filePath string) (*ParsedDocument, error) {
 
 	var textParts []string
 	var images []ImageData
+	imageIndex := 0
 
-	// Extract text from each page
+	// Extract text and images from each page
 	for i := 0; i < doc.NumPage(); i++ {
 		text, err := doc.Text(i)
 		if err == nil && strings.TrimSpace(text) != "" {
 			textParts = append(textParts, text)
 		}
-		// Note: Image extraction can be added later when needed
+		
+		// Extract page as image using ImagePNG (returns []byte PNG data)
+		// Use 150 DPI for reasonable quality/size balance
+		imgData, err := doc.ImagePNG(i, 150.0)
+		if err == nil && len(imgData) > 0 {
+			// Save page as image
+			baseName := strings.TrimSuffix(filepath.Base(filePath), filepath.Ext(filePath))
+			// Sanitize baseName for filesystem
+			baseName = strings.ReplaceAll(baseName, " ", "_")
+			baseName = strings.ReplaceAll(baseName, "/", "_")
+			imgPath := filepath.Join(p.imageDir, fmt.Sprintf("pdf_%s_page%d.png", baseName, i))
+			
+			if err := os.WriteFile(imgPath, imgData, 0644); err == nil {
+				images = append(images, ImageData{
+					Index:    imageIndex,
+					FilePath: imgPath,
+					Data:     imgData,
+				})
+				imageIndex++
+			}
+		}
 	}
 
 	return &ParsedDocument{
@@ -86,14 +107,35 @@ func (p *EPUBParser) Parse(filePath string) (*ParsedDocument, error) {
 
 	var textParts []string
 	var images []ImageData
+	imageIndex := 0
 
-	// Extract text from each page
+	// Extract text and images from each page
 	for i := 0; i < doc.NumPage(); i++ {
 		text, err := doc.Text(i)
 		if err == nil && strings.TrimSpace(text) != "" {
 			textParts = append(textParts, text)
 		}
-		// Note: Image extraction can be added later when needed
+		
+		// Extract page as image using ImagePNG (returns []byte)
+		// Use 150 DPI for reasonable quality/size balance
+		imgData, err := doc.ImagePNG(i, 150.0)
+		if err == nil && len(imgData) > 0 {
+			// Save page as image
+			baseName := strings.TrimSuffix(filepath.Base(filePath), filepath.Ext(filePath))
+			// Sanitize baseName for filesystem
+			baseName = strings.ReplaceAll(baseName, " ", "_")
+			baseName = strings.ReplaceAll(baseName, "/", "_")
+			imgPath := filepath.Join(p.imageDir, fmt.Sprintf("pdf_%s_page%d.png", baseName, i))
+			
+			if err := os.WriteFile(imgPath, imgData, 0644); err == nil {
+				images = append(images, ImageData{
+					Index:    imageIndex,
+					FilePath: imgPath,
+					Data:     imgData,
+				})
+				imageIndex++
+			}
+		}
 	}
 
 	return &ParsedDocument{
@@ -102,12 +144,12 @@ func (p *EPUBParser) Parse(filePath string) (*ParsedDocument, error) {
 	}, nil
 }
 
-// extractTextFromHTML performs basic HTML tag removal
+// extractTextFromHTML performs basic HTML tag removal and entity decoding
 func extractTextFromHTML(html string) string {
-	// Simple approach: remove HTML tags
+	// Simple approach: remove HTML tags and decode entities
 	var result strings.Builder
 	inTag := false
-	for _, r := range html {
+	for i, r := range html {
 		if r == '<' {
 			inTag = true
 			continue
@@ -118,10 +160,34 @@ func extractTextFromHTML(html string) string {
 			continue
 		}
 		if !inTag {
+			// Handle common HTML entities
+			if r == '&' {
+				// Check for common entities
+				remaining := html[i:]
+				if strings.HasPrefix(remaining, "&amp;") {
+					result.WriteRune('&')
+					continue
+				} else if strings.HasPrefix(remaining, "&lt;") {
+					result.WriteRune('<')
+					continue
+				} else if strings.HasPrefix(remaining, "&gt;") {
+					result.WriteRune('>')
+					continue
+				} else if strings.HasPrefix(remaining, "&quot;") {
+					result.WriteRune('"')
+					continue
+				} else if strings.HasPrefix(remaining, "&apos;") {
+					result.WriteRune('\'')
+					continue
+				} else if strings.HasPrefix(remaining, "&nbsp;") {
+					result.WriteRune(' ')
+					continue
+				}
+			}
 			result.WriteRune(r)
 		}
 	}
-	return result.String()
+	return strings.TrimSpace(result.String())
 }
 
 // EPUBParserV2 uses zip-based parsing for better compatibility

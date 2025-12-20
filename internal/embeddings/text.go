@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/pgvector/pgvector-go"
 )
@@ -27,9 +28,11 @@ func NewTextEmbedder(baseURL, model string) *TextEmbedder {
 		model = "nomic-embed-text" // Default embedding model
 	}
 	return &TextEmbedder{
-		baseURL:    baseURL,
-		model:      model,
-		httpClient: &http.Client{},
+		baseURL: baseURL,
+		model:   model,
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second, // 30 second timeout for embedding requests
+		},
 	}
 }
 

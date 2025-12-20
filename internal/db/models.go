@@ -9,13 +9,14 @@ import (
 
 // Document represents a processed document
 type Document struct {
-	ID         uuid.UUID
-	FilePath   string
-	FileHash   string
-	FileType   string
+	ID          uuid.UUID
+	FilePath    string
+	FileHash    string
+	FileType    string
 	ProcessedAt *time.Time
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	ErrorMessage *string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 // Chunk represents a text chunk with embedding

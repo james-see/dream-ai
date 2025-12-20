@@ -4,169 +4,113 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/dream-ai/cli/internal/ollama"
+	"github.com/rivo/tview"
 )
 
-// ModelsView handles model selection
+// ModelsView manages model selection using tview
 type ModelsView struct {
-	app       *App
-	models    []ollama.ModelInfo
-	selected  int
-	currentModel string
-	width     int
-	height    int
-	loading   bool
-	errorMsg  string
+	app      *App
+	flex     *tview.Flex
+	list     *tview.List
+	info     *tview.TextView
+	models   []ollama.ModelInfo
+	current  string
 }
 
 // NewModelsView creates a new models view
 func NewModelsView(app *App, currentModel string) *ModelsView {
-	return &ModelsView{
-		app:          app,
-		currentModel: currentModel,
-		models:       []ollama.ModelInfo{},
-		width:        80,
-		height:       24,
+	mv := &ModelsView{
+		app:     app,
+		current: currentModel,
+		models:  []ollama.ModelInfo{},
 	}
+
+	// Create list for models
+	mv.list = tview.NewList().
+		ShowSecondaryText(true).
+		SetSelectedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
+			mv.selectModel(index)
+		})
+	mv.list.SetBorder(true).SetTitle(" Available Models ")
+
+	// Create info text view
+	mv.info = tview.NewTextView().
+		SetDynamicColors(true).
+		SetWrap(true)
+	mv.info.SetBorder(true).SetTitle(" Model Info ")
+
+	// Create main flex layout
+	mv.flex = tview.NewFlex().
+		AddItem(mv.list, 0, 1, true).
+		AddItem(mv.info, 0, 1, false)
+
+	// Load models
+	mv.reloadModels()
+
+	return mv
 }
 
-// Init initializes the models view
-func (mv *ModelsView) Init() tea.Cmd {
-	return mv.loadModels
+// GetPrimitive returns the tview primitive
+func (mv *ModelsView) GetPrimitive() tview.Primitive {
+	return mv.flex
 }
 
-// Update handles updates
-func (mv *ModelsView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		mv.width = msg.Width
-		mv.height = msg.Height
-		return mv, nil
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "j", "down":
-			if mv.selected < len(mv.models)-1 {
-				mv.selected++
-			}
-			return mv, nil
-		case "k", "up":
-			if mv.selected > 0 {
-				mv.selected--
-			}
-			return mv, nil
-		case "enter", " ":
-			if len(mv.models) > 0 && mv.selected >= 0 {
-				return mv, mv.selectModel
-			}
-		case "r":
-			return mv, mv.loadModels
-		}
-	case modelsLoadedMsg:
-		mv.models = msg.models
-		mv.loading = false
-		// Find current model index
-		for i, model := range mv.models {
-			if model.Name == mv.currentModel {
-				mv.selected = i
-				break
-			}
-		}
-		return mv, nil
-	case modelSelectedMsg:
-		mv.currentModel = msg.model
-		mv.app.chatView.model = msg.model
-		return mv, nil
-	case errorMsg:
-		mv.errorMsg = msg.error.Error()
-		mv.loading = false
-		return mv, nil
-	}
-	return mv, nil
-}
-
-// View renders the models view
-func (mv *ModelsView) View() string {
-	var lines []string
-
-	title := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("205")).
-		Render("Ollama Models")
-
-	lines = append(lines, title)
-	lines = append(lines, "")
-
-	if mv.loading {
-		lines = append(lines, "Loading models...")
-		return lipgloss.JoinVertical(lipgloss.Left, lines...)
-	}
-
-	if mv.errorMsg != "" {
-		errorStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("196")).
-			Render("Error: " + mv.errorMsg)
-		lines = append(lines, errorStyle)
-		lines = append(lines, "")
-	}
-
-	currentStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("39")).
-		Bold(true)
-	lines = append(lines, currentStyle.Render(fmt.Sprintf("Current: %s", mv.currentModel)))
-	lines = append(lines, "")
-
-	if len(mv.models) == 0 {
-		lines = append(lines, "No models found. Make sure Ollama is running.")
-	} else {
-		// Render model list
-		for i, model := range mv.models {
-			style := lipgloss.NewStyle()
-			if i == mv.selected {
-				style = style.Bold(true).Foreground(lipgloss.Color("205"))
-			}
-			if model.Name == mv.currentModel {
-				style = style.Foreground(lipgloss.Color("39"))
-			}
-
-			sizeMB := float64(model.Size) / (1024 * 1024)
-			modelLine := fmt.Sprintf("%s %.2f MB", model.Name, sizeMB)
-			lines = append(lines, style.Render(modelLine))
-		}
-	}
-
-	lines = append(lines, "")
-	help := "j/k: Navigate | Enter/Space: Select | r: Reload"
-	lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(help))
-
-	return lipgloss.JoinVertical(lipgloss.Left, lines...)
-}
-
-// loadModels loads available models
-func (mv *ModelsView) loadModels() tea.Msg {
+// reloadModels reloads the model list
+func (mv *ModelsView) reloadModels() {
 	ctx := context.Background()
 	models, err := mv.app.modelSelector.ListModels(ctx)
 	if err != nil {
-		return errorMsg{error: err}
+		mv.info.SetText(fmt.Sprintf("[red]Error loading models: %v", err))
+		return
 	}
-	return modelsLoadedMsg{models: models}
-}
 
-// selectModel selects the current model
-func (mv *ModelsView) selectModel() tea.Msg {
-	if mv.selected < 0 || mv.selected >= len(mv.models) {
-		return nil
+	mv.models = models
+	mv.list.Clear()
+
+	for i, model := range models {
+		isCurrent := ""
+		if model.Name == mv.current {
+			isCurrent = " [green]← Current"
+		}
+		
+		mainText := fmt.Sprintf("%d. %s%s", i+1, model.Name, isCurrent)
+		secondaryText := fmt.Sprintf("Size: %s", formatModelSize(model.Size))
+		
+		mv.list.AddItem(mainText, secondaryText, 0, nil)
 	}
-	return modelSelectedMsg{model: mv.models[mv.selected].Name}
+
+	if len(models) == 0 {
+		mv.info.SetText("[yellow]No models found. Make sure Ollama is running.")
+	} else {
+		mv.info.SetText(fmt.Sprintf("[white]Total: %d models available", len(models)))
+	}
 }
 
-// modelsLoadedMsg signals models have been loaded
-type modelsLoadedMsg struct {
-	models []ollama.ModelInfo
+// selectModel selects a model
+func (mv *ModelsView) selectModel(index int) {
+	if index < 0 || index >= len(mv.models) {
+		return
+	}
+
+	model := mv.models[index]
+	mv.current = model.Name
+	mv.app.chatView.model = model.Name
+	
+	mv.reloadModels()
+	mv.info.SetText(fmt.Sprintf("[green]Selected model: %s", model.Name))
 }
 
-// modelSelectedMsg signals a model has been selected
-type modelSelectedMsg struct {
-	model string
+// formatModelSize formats model size
+func formatModelSize(size int64) string {
+	if size < 1024 {
+		return fmt.Sprintf("%d B", size)
+	}
+	if size < 1024*1024 {
+		return fmt.Sprintf("%.1f KB", float64(size)/1024)
+	}
+	if size < 1024*1024*1024 {
+		return fmt.Sprintf("%.1f MB", float64(size)/(1024*1024))
+	}
+	return fmt.Sprintf("%.1f GB", float64(size)/(1024*1024*1024))
 }

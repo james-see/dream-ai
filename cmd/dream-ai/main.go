@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/dream-ai/cli/config"
 	"github.com/dream-ai/cli/internal/db"
 	"github.com/dream-ai/cli/internal/tui"
@@ -60,22 +59,20 @@ func main() {
 		}
 	}
 
-	// Create and run TUI
-	app, err := tui.NewApp(cfg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error initializing app: %v\n", err)
-		os.Exit(1)
-	}
-	defer app.Close()
-
 	// Run migrations on startup if needed
 	if err := ensureMigrations(cfg.Database.ConnectionString); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Migration check failed: %v\n", err)
 		// Continue anyway - migrations might already be applied
 	}
 
-	p := tea.NewProgram(app, tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
+	// Create and run TUI
+	app, err := tui.NewApp(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error initializing app: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := app.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error running app: %v\n", err)
 		os.Exit(1)
 	}

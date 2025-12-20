@@ -30,8 +30,8 @@ type Config struct {
 		ScriptPath string `yaml:"script_path"`
 	} `yaml:"clip2"`
 	Paths struct {
-		DocumentsDir string `yaml:"documents_dir"`
-		ImageDir     string `yaml:"image_dir"`
+		DocumentsDirs []string `yaml:"documents_dirs"` // Multiple document directories
+		ImageDir      string   `yaml:"image_dir"`
 	} `yaml:"paths"`
 }
 
@@ -87,7 +87,10 @@ func Default() *Config {
 	cfg.CLIP2.ScriptPath = ""
 	
 	homeDir := os.Getenv("HOME")
-	cfg.Paths.DocumentsDir = filepath.Join(homeDir, "documents")
+	// Default to ~/.config/dream-ai/documents only
+	cfg.Paths.DocumentsDirs = []string{
+		filepath.Join(homeDir, ".config", "dream-ai", "documents"),
+	}
 	cfg.Paths.ImageDir = filepath.Join(os.TempDir(), "dream-ai-images")
 	
 	return cfg
